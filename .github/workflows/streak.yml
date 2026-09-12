@@ -1,0 +1,63 @@
+name: Update Streak Badge
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * *'  # daily at midnight UTC, so streak doesn't go stale on no-push days
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-streak:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate streak and sessions
+        id: calc
+        run: |
+          # SESSIONS = unique days with at least one commit
+          TOTAL=$(git log --format="%ad" --date=short | sort -u | wc -l)
+
+          # Unique commit dates, newest first
+          DATES=$(git log --format="%ad" --date=short | sort -u -r)
+
+          STREAK=0
+          EXPECTED=$(date +%Y-%m-%d)
+
+          for d in $DATES; do
+            if [ "$d" == "$EXPECTED" ]; then
+              STREAK=$((STREAK+1))
+              EXPECTED=$(date -d "$EXPECTED - 1 day" +%Y-%m-%d)
+            elif [ "$d" == "$(date -d "$EXPECTED - 1 day" +%Y-%m-%d)" ]; then
+              # grace: allow today to have no commit yet
+              EXPECTED=$d
+              STREAK=$((STREAK+1))
+              EXPECTED=$(date -d "$EXPECTED - 1 day" +%Y-%m-%d)
+            else
+              break
+            fi
+          done
+
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "streak=$STREAK" >> $GITHUB_OUTPUT
+
+      - name: Update badge JSON
+        run: |
+          mkdir -p .github/badges
+          echo "{\"schemaVersion\": 1, \"label\": \"streak\", \"message\": \"${{ steps.calc.outputs.streak }} days\", \"color\": \"orange\"}" > .github/badges/streak.json
+          echo "{\"schemaVersion\": 1, \"label\": \"sessions\", \"message\": \"${{ steps.calc.outputs.total }} days\", \"color\": \"blueviolet\"}" > .github/badges/sessions.json
+
+      - name: Commit badge update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/badges/*.json
+          git diff --quiet && git diff --staged --quiet || git commit -m "chore: update streak badge [skip ci]"
+          git push
